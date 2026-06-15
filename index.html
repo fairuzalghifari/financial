@@ -1840,7 +1840,6 @@ function gapiLoaded() {
 }
 
 function maybeInitGis() {
-  // Wait for both gapi and GSI to be ready
   if (typeof google === 'undefined' || !google.accounts) {
     setTimeout(maybeInitGis, 300);
     return;
@@ -1850,24 +1849,55 @@ function maybeInitGis() {
     client_id: CLIENT_ID,
     scope: SCOPES,
     callback: async (resp) => {
-      if (resp.error) { setSyncState('err', 'Login gagal'); return; }
+      if (resp.error) {
+        setSyncState('err', 'Login gagal');
+        // Silent login failed — fall through to normal init
+        normalInit();
+        return;
+      }
       isSignedIn = true;
-      setSyncState('ing', 'Menghubungkan...');
+      setSyncState('ing', 'Memuat data...');
       await loadFromDrive();
+      // After Drive load, close setup modal if data came from cloud
+      if (CURRENT.setup) {
+        closeModal('modal-setup');
+        D = CURRENT;
+        document.getElementById('nav-month').textContent = D.bulan;
+        renderDash();
+      } else {
+        normalInit();
+      }
     },
   });
-  // Try silent restore — check if we have a cached token
+
+  // ── Try silent login (no popup) ──
+  setSyncState('ing', 'Menghubungkan...');
+  try {
+    tokenClient.requestAccessToken({ prompt: '' }); // empty prompt = silent
+  } catch(e) {
+    setSyncState('off', 'Google Drive');
+    normalInit();
+  }
+}
+
+function normalInit() {
+  if (CURRENT.setup) {
+    D = CURRENT;
+    document.getElementById('nav-month').textContent = D.bulan;
+    renderDash();
+  } else {
+    document.getElementById('modal-setup').classList.add('open');
+  }
   setSyncState('off', 'Google Drive');
 }
 
 function handleDriveClick() {
   if (!gapiReady || !gisReady) { alert('Sedang memuat Google API, coba lagi sebentar.'); return; }
   if (isSignedIn) {
-    // Already signed in — force sync now
     setSyncState('ing', 'Menyinkron...');
     saveToDrive();
   } else {
-    // Request token (shows Google login popup)
+    // Manual login with consent prompt
     tokenClient.requestAccessToken({ prompt: 'consent' });
   }
 }
@@ -1882,7 +1912,6 @@ function setSyncState(state, label) {
 // ── LOAD from Drive on first sign-in ──
 async function loadFromDrive() {
   try {
-    // Find our file in appDataFolder
     const list = await gapi.client.drive.files.list({
       spaces: 'appDataFolder',
       fields: 'files(id, name)',
@@ -1891,31 +1920,28 @@ async function loadFromDrive() {
     const files = list.result.files;
     if (files && files.length > 0) {
       driveFileId = files[0].id;
-      // Download content
       const resp = await gapi.client.drive.files.get({
         fileId: driveFileId,
         alt: 'media',
       });
       const cloud = typeof resp.result === 'string' ? JSON.parse(resp.result) : resp.result;
-      // Merge: prefer cloud data (newer device wins)
-      // Compare by checking which has more transactions
-      const localTxCount  = (CURRENT.txs||[]).length + HIST.reduce((a,h)=>a+(h.txs||[]).length,0);
-      const cloudTxCount  = ((cloud.current||{}).txs||[]).length + (cloud.history||[]).reduce((a,h)=>a+(h.txs||[]).length,0);
-      if (cloudTxCount >= localTxCount && cloud.current && cloud.current.setup) {
+      const localTxCount = (CURRENT.txs||[]).length + HIST.reduce((a,h)=>a+(h.txs||[]).length,0);
+      const cloudTxCount = ((cloud.current||{}).txs||[]).length + (cloud.history||[]).reduce((a,h)=>a+(h.txs||[]).length,0);
+      if (cloud.current && cloud.current.setup && cloudTxCount >= localTxCount) {
         CURRENT = cloud.current;
         HIST    = cloud.history || [];
-        D       = VIEW_MODE === 'current' ? CURRENT : HIST[HIST_IDX];
+        D       = CURRENT;
         saveCurrent(); saveHist();
-        document.getElementById('nav-month').textContent = D.bulan;
-        renderDash();
         setSyncState('ok', 'Tersinkron ✓');
       } else {
         // Local is newer — push to Drive
         await saveToDrive();
+        setSyncState('ok', 'Tersinkron ✓');
       }
     } else {
-      // No file on Drive yet — create it
+      // No file on Drive yet — create it from local data
       await saveToDrive();
+      setSyncState('ok', 'Tersinkron ✓');
     }
   } catch(e) {
     console.error('Drive load error:', e);
@@ -1989,13 +2015,16 @@ function save() {
 document.getElementById('in-tgl').value=today();
 onTipeChange();
 
-if (CURRENT.setup) {
-  D = CURRENT;
-  document.getElementById('nav-month').textContent=D.bulan;
-  renderDash();
-} else {
-  document.getElementById('modal-setup').classList.add('open');
-}
+// Show loading state in header while Drive check runs
+document.getElementById('nav-month').textContent = '...';
+
+// If gapi hasn't loaded yet (async), normalInit will be called from maybeInitGis
+// If gapi never loads (offline/blocked), fall back after 5 seconds
+setTimeout(() => {
+  if (!gapiReady && !isSignedIn) {
+    normalInit();
+  }
+}, 5000);
 </script>
 </body>
 </html>
