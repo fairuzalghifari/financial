@@ -845,19 +845,6 @@ let HIST_IDX  = -1; // index in HIST array when in history mode
 const saveCurrent = () => localStorage.setItem('finrpt_v3', JSON.stringify(CURRENT));
 const saveHist    = () => localStorage.setItem('finrpt_v3_hist', JSON.stringify(HIST));
 
-// save() always writes D back to the right place
-function save() {
-  if (VIEW_MODE === 'current') {
-    CURRENT = D;
-    saveCurrent();
-  } else {
-    HIST[HIST_IDX] = D;
-    saveHist();
-    // After saving history, recalculate Ganti for the next month
-    syncNextMonthGanti(HIST_IDX);
-  }
-}
-
 // When piutang in month X changes, auto-update Ganti of month X+1
 function syncNextMonthGanti(changedIdx) {
   // changedIdx is in HIST. The "next" month is either HIST[changedIdx+1] or CURRENT.
@@ -881,7 +868,11 @@ function syncNextMonthGanti(changedIdx) {
   }
 }
 
-let cDonut = null, cBar = null, curEd = '';
+// Safe getters — handle old data that doesn't have these fields
+const saham   = () => Array.isArray(D.saham)   ? D.saham   : (D.saham   = []);
+const sahamUS = () => Array.isArray(D.sahamUS) ? D.sahamUS : (D.sahamUS = []);
+const crypto  = () => Array.isArray(D.crypto)  ? D.crypto  : (D.crypto  = []);
+const allInv  = () => [...saham(), ...sahamUS(), ...crypto()];
 
 const closeModal = id => document.getElementById(id).classList.remove('open');
 
@@ -970,7 +961,7 @@ function getNetWorth() {
     mama.filter(x=>!x.paid).reduce((a,x)=>a+x.nom,0) +
     orang.filter(x=>!x.paid).reduce((a,x)=>a+x.nom,0) +
     D.sa.Ganti;
-  const investNow = [...D.saham,...D.sahamUS,...D.crypto].reduce((a,x)=>a+x.harga,0);
+  const investNow = allInv().reduce((a,x)=>a+x.harga,0);
   return { kas, piutangAktif, investNow, total: kas+piutangAktif+investNow };
 }
 
@@ -1012,7 +1003,7 @@ function renderDash() {
   const totalL = getPengeluaranL();
   const totalE = D.txs.filter(t=>t.tipe==='keluar-E').reduce((a,x)=>a+x.nom,0);
   const totalPiu = D.txs.filter(t=>t.tipe==='keluar-piutang').reduce((a,x)=>a+x.nom,0);
-  const investModal = [...D.saham,...D.sahamUS,...D.crypto].reduce((a,x)=>a+x.modal,0);
+  const investModal = allInv().reduce((a,x)=>a+x.modal,0);
   const investRet   = investNow - investModal;
 
   document.getElementById('h-kekayaan').textContent = idrS(total);
@@ -1064,11 +1055,11 @@ function renderDash() {
       (activePiu.length>6?`<div style="font-size:11px;color:var(--ink4);padding:6px 0">+${activePiu.length-6} lainnya</div>`:'')
     )+`<div class="total-row"><span>Total Aktif</span><span class="pos tnum">${idr(piutangAktif)}</span></div>`;
 
-  const allInv = [...D.saham,...D.sahamUS,...D.crypto];
+  const allInvList = allInv();
   document.getElementById('d-invest').innerHTML =
-    (allInv.length===0
+    (allInvList.length===0
       ?'<div style="font-size:13px;color:var(--ink4);padding:10px 0">Belum ada data investasi.</div>'
-      :allInv.map(x=>{const r=x.harga-x.modal,p=x.modal?r/x.modal:0;return `
+      :allInvList.map(x=>{const r=x.harga-x.modal,p=x.modal?r/x.modal:0;return `
         <div class="srow">
           <span style="font-size:13px;color:var(--ink2)">${x.nama}</span>
           <span style="display:flex;align-items:center;gap:7px">
@@ -1392,9 +1383,9 @@ function renderPiutang() {
 // INVESTASI
 // ══════════════════════════
 function renderInvestasi() {
-  const allInv=[...D.saham,...D.sahamUS,...D.crypto];
-  const tModal=allInv.reduce((a,x)=>a+x.modal,0);
-  const tHarga=allInv.reduce((a,x)=>a+x.harga,0);
+  const inv=allInv();
+  const tModal=inv.reduce((a,x)=>a+x.modal,0);
+  const tHarga=inv.reduce((a,x)=>a+x.harga,0);
   const tRet=tHarga-tModal;
   document.getElementById('inv-stats').innerHTML = `
     <div class="sc"><div class="sc-l">Modal Total</div><div class="sc-v">${idrS(tModal)}</div></div>
@@ -1416,9 +1407,9 @@ function renderInvestasi() {
           </div>
         </div>`;}).join('');
   };
-  mkInvList(D.saham,'saham');
-  mkInvList(D.sahamUS,'sahamUS');
-  mkInvList(D.crypto,'crypto');
+  mkInvList(saham(),'saham');
+  mkInvList(sahamUS(),'sahamUS');
+  mkInvList(crypto(),'crypto');
 }
 
 function openEd(type) {
@@ -1657,9 +1648,9 @@ function doReset() {
     sa:newSa,
     txs:[],
     paid:[],
-    saham:clone(CURRENT.saham),
-    sahamUS:clone(CURRENT.sahamUS),
-    crypto:clone(CURRENT.crypto),
+    saham:clone(saham()),
+    sahamUS:clone(sahamUS()),
+    crypto:clone(crypto()),
   };
   D = CURRENT;
   VIEW_MODE = 'current';
@@ -1747,7 +1738,7 @@ function exportExcelData(data, labelOverride) {
   const tm=mama.filter(x=>!x.paid).reduce((a,x)=>a+x.nom,0);
   const to=orang.filter(x=>!x.paid).reduce((a,x)=>a+x.nom,0);
   const piutangAktif=tp+tm+to+(data.sa.Ganti||0);
-  const invNow=data===D?[...D.saham,...D.sahamUS,...D.crypto].reduce((a,x)=>a+x.harga,0):0;
+  const invNow=data===D?allInv().reduce((a,x)=>a+x.harga,0):0;
   const totalL=data.txs.filter(t=>t.tipe==='keluar-L').reduce((a,x)=>a+x.nom,0);
   const totalE=data.txs.filter(t=>t.tipe==='keluar-E').reduce((a,x)=>a+x.nom,0);
 
@@ -1792,7 +1783,7 @@ function exportExcelData(data, labelOverride) {
   piuRows.forEach((row,i)=>{if(typeof row[3]==='number'){const ref=XLSX.utils.encode_cell({r:i,c:3});if(ws3[ref])ws3[ref].z=numFmt;}});
   XLSX.utils.book_append_sheet(wb,ws3,'Piutang');
 
-  const allInvD=data===D?[...D.saham,...D.sahamUS,...D.crypto]:[];
+  const allInvD=data===D?allInv():[];
   if (allInvD.length>0) {
     const invRows=[['INVESTASI — '+bulan],[]];
     const addIG=(label,arr)=>{
@@ -1803,7 +1794,7 @@ function exportExcelData(data, labelOverride) {
       invRows.push(['TOTAL',raw(totM),raw(totH),raw(totH-totM),totM?((totH-totM)/totM*100).toFixed(2)+'%':'0%']);
       invRows.push([]);
     };
-    addIG('SAHAM IDX',D.saham); addIG('SAHAM US',D.sahamUS); addIG('CRYPTO',D.crypto);
+    addIG('SAHAM IDX',saham()); addIG('SAHAM US',sahamUS()); addIG('CRYPTO',crypto());
     const ws4=XLSX.utils.aoa_to_sheet(invRows);
     ws4['!cols']=[{wch:28},{wch:18},{wch:18},{wch:16},{wch:12}];
     invRows.forEach((row,i)=>[1,2,3].forEach(j=>{if(typeof row[j]==='number'){const ref=XLSX.utils.encode_cell({r:i,c:j});if(ws4[ref])ws4[ref].z=numFmt;}}));
@@ -1988,11 +1979,8 @@ async function saveToDrive() {
   }
 }
 
-// ── Auto-sync after every save() ──
-// Wrap the original save() to trigger Drive sync with debounce
-const _origSave = save;
-// Override save to also trigger Drive sync
-function save() {
+// ── Auto-sync after every save() with debounce ──
+const _origSaveInternal = () => {
   if (VIEW_MODE === 'current') {
     CURRENT = D;
     saveCurrent();
@@ -2001,7 +1989,10 @@ function save() {
     saveHist();
     syncNextMonthGanti(HIST_IDX);
   }
-  // Debounced Drive sync — wait 1.5s after last change
+};
+
+function save() {
+  _origSaveInternal();
   if (isSignedIn) {
     setSyncState('ing', 'Mengetik...');
     clearTimeout(syncTimer);
