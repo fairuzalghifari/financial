@@ -1505,6 +1505,31 @@ function renderRiwayat() {
             </table>
           </div>
         </div>
+        <div>
+          <div class="sec-title">Investasi Saat Itu</div>
+          ${(()=>{
+            const inv=[...(h.saham||[]),...(h.sahamUS||[]),...(h.crypto||[])];
+            if (inv.length===0) return '<div style="font-size:13px;color:var(--ink4);padding:8px 0">Tidak ada data investasi tersimpan untuk bulan ini.</div>';
+            const tModal=inv.reduce((a,x)=>a+x.modal,0);
+            const tHarga=inv.reduce((a,x)=>a+x.harga,0);
+            const tRet=tHarga-tModal;
+            return inv.map(x=>{const r=x.harga-x.modal,p=x.modal?r/x.modal*100:0;return `
+              <div class="srow">
+                <span style="font-size:13px;color:var(--ink2)">${x.nama}</span>
+                <span style="display:flex;align-items:center;gap:8px">
+                  <span style="font-size:13px;font-weight:600">${idrS(x.harga)}</span>
+                  <span class="chip ${r>=0?'chip-up':'chip-dn'}">${r>=0?'▲':'▼'}${Math.abs(p).toFixed(1)}%</span>
+                </span>
+              </div>`;}).join('')+
+            `<div class="srow" style="border-top:1px solid var(--border-md);margin-top:4px">
+              <span style="font-weight:700">Total Investasi</span>
+              <span style="display:flex;align-items:center;gap:8px">
+                <span style="font-weight:700">${idrS(tHarga)}</span>
+                <span class="chip ${tRet>=0?'chip-up':'chip-dn'}">${tRet>=0?'▲':'▼'}${tModal?Math.abs(tRet/tModal*100).toFixed(1):0}%</span>
+              </span>
+            </div>`;
+          })()}
+        </div>
         <div style="margin-top:14px;display:flex;gap:10px">
           <button class="btn btn-ghost btn-sm" onclick="exportHistExcel(${realIdx})">↓ Export Excel</button>
           <button class="btn btn-ghost btn-sm" style="color:var(--red);border-color:rgba(181,42,28,.2)" onclick="if(confirm('Hapus riwayat ${h.bulan}?'))hapusHist(${realIdx})">Hapus Riwayat</button>
@@ -1607,6 +1632,9 @@ function doReset() {
     sa: clone(CURRENT.sa),
     txs: clone(CURRENT.txs),
     paid: clone(CURRENT.paid),
+    saham: clone(saham()),
+    sahamUS: clone(sahamUS()),
+    crypto: clone(crypto()),
     savedAt: new Date().toISOString(),
   };
   HIST.push(snapshot);
@@ -1717,7 +1745,7 @@ function exportExcelData(data, labelOverride) {
   const tm=mama.filter(x=>!x.paid).reduce((a,x)=>a+x.nom,0);
   const to=orang.filter(x=>!x.paid).reduce((a,x)=>a+x.nom,0);
   const piutangAktif=tp+tm+to+(data.sa.Ganti||0);
-  const invNow=data===D?allInv().reduce((a,x)=>a+x.harga,0):0;
+  const invNow=data===D?allInv().reduce((a,x)=>a+x.harga,0):[...(data.saham||[]),...(data.sahamUS||[]),...(data.crypto||[])].reduce((a,x)=>a+x.harga,0);
   const totalL=data.txs.filter(t=>t.tipe==='keluar-L').reduce((a,x)=>a+x.nom,0);
   const totalE=data.txs.filter(t=>t.tipe==='keluar-E').reduce((a,x)=>a+x.nom,0);
 
@@ -1762,7 +1790,8 @@ function exportExcelData(data, labelOverride) {
   piuRows.forEach((row,i)=>{if(typeof row[3]==='number'){const ref=XLSX.utils.encode_cell({r:i,c:3});if(ws3[ref])ws3[ref].z=numFmt;}});
   XLSX.utils.book_append_sheet(wb,ws3,'Piutang');
 
-  const allInvD=data===D?allInv():[];
+  const dataInv = data===D ? allInv() : [...(data.saham||[]),...(data.sahamUS||[]),...(data.crypto||[])];
+  const allInvD = dataInv;
   if (allInvD.length>0) {
     const invRows=[['INVESTASI — '+bulan],[]];
     const addIG=(label,arr)=>{
@@ -1773,7 +1802,9 @@ function exportExcelData(data, labelOverride) {
       invRows.push(['TOTAL',raw(totM),raw(totH),raw(totH-totM),totM?((totH-totM)/totM*100).toFixed(2)+'%':'0%']);
       invRows.push([]);
     };
-    addIG('SAHAM IDX',saham()); addIG('SAHAM US',sahamUS()); addIG('CRYPTO',crypto());
+    addIG('SAHAM IDX', data===D?saham():(data.saham||[]));
+    addIG('SAHAM US',  data===D?sahamUS():(data.sahamUS||[]));
+    addIG('CRYPTO',    data===D?crypto():(data.crypto||[]));
     const ws4=XLSX.utils.aoa_to_sheet(invRows);
     ws4['!cols']=[{wch:28},{wch:18},{wch:18},{wch:16},{wch:12}];
     invRows.forEach((row,i)=>[1,2,3].forEach(j=>{if(typeof row[j]==='number'){const ref=XLSX.utils.encode_cell({r:i,c:j});if(ws4[ref])ws4[ref].z=numFmt;}}));
