@@ -6,8 +6,6 @@
 <title>Financial Report</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
-<script src="https://apis.google.com/js/api.js" async defer onload="gapiLoaded()"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
@@ -313,23 +311,6 @@ code { background: rgba(0,0,0,0.07); padding: 1px 5px; border-radius: 3px; font-
 .hist-bd { display: none; padding: 16px; border-top: 1px solid var(--border); }
 .hist-bd.open { display: block; }
 
-/* ─── DRIVE SYNC ─── */
-.sync-dot { width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px;flex-shrink:0; }
-.sync-ok   { background:#1a6636; }
-.sync-ing  { background:#8a4e00;animation:pulse .9s infinite; }
-.sync-err  { background:#b52a1c; }
-.sync-off  { background:#9a9a9a; }
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-.drive-btn {
-  display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:6px;
-  border:1px solid var(--border-md);background:transparent;font-size:11px;
-  font-weight:600;color:var(--ink3);cursor:pointer;font-family:var(--font);
-  transition:all .15s;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;
-}
-.drive-btn:hover{background:var(--bg2);}
-body.hist-mode .drive-btn{color:rgba(255,255,255,0.6);border-color:rgba(255,255,255,0.2);}
-body.hist-mode .drive-btn:hover{background:rgba(255,255,255,0.1);}
-
 /* ─── HISTORY MODE ─── */
 body.hist-mode header {
   background: rgba(26,26,26,0.96) !important;
@@ -508,10 +489,6 @@ body.hist-mode #hist-banner { display: flex !important; }
   </div>
   <div class="nav-right">
     <span class="nav-month" id="nav-month"></span>
-    <button class="drive-btn" id="drive-btn" onclick="handleDriveClick()">
-      <span class="sync-dot sync-off" id="sync-dot"></span>
-      <span id="sync-label">Google Drive</span>
-    </button>
     <button class="nav-backup" onclick="exportJ()">↓ JSON</button>
     <button class="nav-backup g" onclick="exportExcel()">↓ Excel</button>
   </div>
@@ -873,6 +850,8 @@ const saham   = () => Array.isArray(D.saham)   ? D.saham   : (D.saham   = []);
 const sahamUS = () => Array.isArray(D.sahamUS) ? D.sahamUS : (D.sahamUS = []);
 const crypto  = () => Array.isArray(D.crypto)  ? D.crypto  : (D.crypto  = []);
 const allInv  = () => [...saham(), ...sahamUS(), ...crypto()];
+
+let cDonut = null, cBar = null, curEd = '';
 
 const closeModal = id => document.getElementById(id).classList.remove('open');
 
@@ -1805,182 +1784,9 @@ function exportExcelData(data, labelOverride) {
 }
 
 // ══════════════════════════
-// GOOGLE DRIVE SYNC
+// SAVE
 // ══════════════════════════
-const CLIENT_ID  = '812956712454-8ccpbn17sqkgg1jiae14govq6s2bechs.apps.googleusercontent.com';
-const SCOPES     = 'https://www.googleapis.com/auth/drive.appdata';
-const FILE_NAME  = 'finrpt_data.json';
-
-let gapiReady    = false;
-let gisReady     = false;
-let tokenClient  = null;
-let driveFileId  = null;
-let syncPending  = false;
-let syncTimer    = null;
-let isSignedIn   = false;
-
-// Called when gapi.js finishes loading
-function gapiLoaded() {
-  gapi.load('client', async () => {
-    await gapi.client.init({
-      discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
-    });
-    gapiReady = true;
-    maybeInitGis();
-  });
-}
-
-function maybeInitGis() {
-  if (typeof google === 'undefined' || !google.accounts) {
-    setTimeout(maybeInitGis, 300);
-    return;
-  }
-  gisReady = true;
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: CLIENT_ID,
-    scope: SCOPES,
-    callback: async (resp) => {
-      if (resp.error) {
-        setSyncState('err', 'Login gagal');
-        // Silent login failed — fall through to normal init
-        normalInit();
-        return;
-      }
-      isSignedIn = true;
-      setSyncState('ing', 'Memuat data...');
-      await loadFromDrive();
-      // After Drive load, close setup modal if data came from cloud
-      if (CURRENT.setup) {
-        closeModal('modal-setup');
-        D = CURRENT;
-        document.getElementById('nav-month').textContent = D.bulan;
-        renderDash();
-      } else {
-        normalInit();
-      }
-    },
-  });
-
-  // ── Try silent login (no popup) ──
-  setSyncState('ing', 'Menghubungkan...');
-  try {
-    tokenClient.requestAccessToken({ prompt: '' }); // empty prompt = silent
-  } catch(e) {
-    setSyncState('off', 'Google Drive');
-    normalInit();
-  }
-}
-
-function normalInit() {
-  if (CURRENT.setup) {
-    D = CURRENT;
-    document.getElementById('nav-month').textContent = D.bulan;
-    renderDash();
-  } else {
-    document.getElementById('modal-setup').classList.add('open');
-  }
-  setSyncState('off', 'Google Drive');
-}
-
-function handleDriveClick() {
-  if (!gapiReady || !gisReady) { alert('Sedang memuat Google API, coba lagi sebentar.'); return; }
-  if (isSignedIn) {
-    setSyncState('ing', 'Menyinkron...');
-    saveToDrive();
-  } else {
-    // Manual login with consent prompt
-    tokenClient.requestAccessToken({ prompt: 'consent' });
-  }
-}
-
-function setSyncState(state, label) {
-  const dot = document.getElementById('sync-dot');
-  const lbl = document.getElementById('sync-label');
-  dot.className = 'sync-dot sync-' + state;
-  lbl.textContent = label;
-}
-
-// ── LOAD from Drive on first sign-in ──
-async function loadFromDrive() {
-  try {
-    const list = await gapi.client.drive.files.list({
-      spaces: 'appDataFolder',
-      fields: 'files(id, name)',
-      q: `name='${FILE_NAME}'`,
-    });
-    const files = list.result.files;
-    if (files && files.length > 0) {
-      driveFileId = files[0].id;
-      const resp = await gapi.client.drive.files.get({
-        fileId: driveFileId,
-        alt: 'media',
-      });
-      const cloud = typeof resp.result === 'string' ? JSON.parse(resp.result) : resp.result;
-      const localTxCount = (CURRENT.txs||[]).length + HIST.reduce((a,h)=>a+(h.txs||[]).length,0);
-      const cloudTxCount = ((cloud.current||{}).txs||[]).length + (cloud.history||[]).reduce((a,h)=>a+(h.txs||[]).length,0);
-      if (cloud.current && cloud.current.setup && cloudTxCount >= localTxCount) {
-        CURRENT = cloud.current;
-        HIST    = cloud.history || [];
-        D       = CURRENT;
-        saveCurrent(); saveHist();
-        setSyncState('ok', 'Tersinkron ✓');
-      } else {
-        // Local is newer — push to Drive
-        await saveToDrive();
-        setSyncState('ok', 'Tersinkron ✓');
-      }
-    } else {
-      // No file on Drive yet — create it from local data
-      await saveToDrive();
-      setSyncState('ok', 'Tersinkron ✓');
-    }
-  } catch(e) {
-    console.error('Drive load error:', e);
-    setSyncState('err', 'Gagal memuat');
-  }
-}
-
-// ── SAVE to Drive ──
-async function saveToDrive() {
-  if (!isSignedIn || !gapiReady) return;
-  try {
-    setSyncState('ing', 'Menyimpan...');
-    const payload = JSON.stringify({ current: CURRENT, history: HIST });
-    const blob    = new Blob([payload], { type: 'application/json' });
-
-    if (driveFileId) {
-      // Update existing file
-      await fetch(`https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': 'Bearer ' + gapi.client.getToken().access_token,
-          'Content-Type': 'application/json',
-        },
-        body: payload,
-      });
-    } else {
-      // Create new file in appDataFolder
-      const meta = JSON.stringify({ name: FILE_NAME, parents: ['appDataFolder'] });
-      const form = new FormData();
-      form.append('metadata', new Blob([meta], { type: 'application/json' }));
-      form.append('file', blob);
-      const resp = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + gapi.client.getToken().access_token },
-        body: form,
-      });
-      const data = await resp.json();
-      driveFileId = data.id;
-    }
-    setSyncState('ok', 'Tersinkron ✓');
-  } catch(e) {
-    console.error('Drive save error:', e);
-    setSyncState('err', 'Gagal simpan');
-  }
-}
-
-// ── Auto-sync after every save() with debounce ──
-const _origSaveInternal = () => {
+function save() {
   if (VIEW_MODE === 'current') {
     CURRENT = D;
     saveCurrent();
@@ -1988,15 +1794,6 @@ const _origSaveInternal = () => {
     HIST[HIST_IDX] = D;
     saveHist();
     syncNextMonthGanti(HIST_IDX);
-  }
-};
-
-function save() {
-  _origSaveInternal();
-  if (isSignedIn) {
-    setSyncState('ing', 'Mengetik...');
-    clearTimeout(syncTimer);
-    syncTimer = setTimeout(() => saveToDrive(), 1500);
   }
 }
 
@@ -2006,16 +1803,13 @@ function save() {
 document.getElementById('in-tgl').value=today();
 onTipeChange();
 
-// Show loading state in header while Drive check runs
-document.getElementById('nav-month').textContent = '...';
-
-// If gapi hasn't loaded yet (async), normalInit will be called from maybeInitGis
-// If gapi never loads (offline/blocked), fall back after 5 seconds
-setTimeout(() => {
-  if (!gapiReady && !isSignedIn) {
-    normalInit();
-  }
-}, 5000);
+if (CURRENT.setup) {
+  D = CURRENT;
+  document.getElementById('nav-month').textContent = D.bulan;
+  renderDash();
+} else {
+  document.getElementById('modal-setup').classList.add('open');
+}
 </script>
 </body>
 </html>
